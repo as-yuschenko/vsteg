@@ -53,7 +53,7 @@ int main(int argc, char** argv)
 
     uint8_t     cmd_ok = 0;
     uint8_t     attach = 0;
-    uint8_t     merge = 0;
+    uint8_t     split = 0;
 
 
     const char*       sec_file_path = nullptr;
@@ -76,7 +76,7 @@ int main(int argc, char** argv)
         {
             switch (argv[1][1])
             {
-            case 'a' :
+            case 'e' :
                 if (argc == 5)
                 {
                     container_file_path = argv[2];
@@ -86,13 +86,13 @@ int main(int argc, char** argv)
                     cmd_ok = 1;
                 }
                 break;
-            case 'm' :
+            case 's' :
                 if (argc == 5)
                 {
                     container_file_path = argv[2];
                     sec_file_path = argv[3];
                     memcpy(pwd, argv[4], KEY_LEN);
-                    merge = 1;
+                    split = 1;
                     cmd_ok = 1;
                 }
                 break;
@@ -136,9 +136,6 @@ int main(int argc, char** argv)
     int32_t     sec_file, container_file;
 
 
-
-
-    //attach
     if (attach)
     {
 
@@ -254,7 +251,7 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    if (merge)
+    if (split)
     {
         /*result file*/
         container_file_len = fsize(container_file_path);
