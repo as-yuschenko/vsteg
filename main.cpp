@@ -15,7 +15,7 @@
 #define APPENDIX_SIZE           12
 #define CP_BUFF_SIZE            2097152
 
-#define KEY_LEN 8
+#define MAX_KEY_LEN 16
 #define NUM_ROUNDS 16
 #define NUM_BYTES_ENC 8192
 
@@ -44,8 +44,8 @@ const uint8_t S_TABLE[256] =
     0x20, 0x71, 0x67, 0xA4, 0x2D, 0x2B, 0x09, 0x5B, 0xCB, 0x9B, 0x25, 0xD0, 0xBE, 0xE5, 0x6C, 0x52,
     0x59, 0xA6, 0x74, 0xD2, 0xE6, 0xF4, 0xB4, 0xC0, 0xD1, 0x66, 0xAF, 0xC2, 0x39, 0x4B, 0x63, 0xB6
 };
-void vEncrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key);
-void vDecrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key);
+void vEncrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key, uint8_t key_len);
+void vDecrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key, uint8_t key_len);
 
 
 int main(int argc, char** argv)
@@ -58,7 +58,8 @@ int main(int argc, char** argv)
 
     const char*       sec_file_path = nullptr;
     const char*       container_file_path = nullptr;
-    uint8_t           pwd[KEY_LEN];
+    uint8_t           pwd[MAX_KEY_LEN];
+    uint8_t           pwd_len;
 
     if ((argc == 2) and (!strcmp(argv[1],"-h")))
     {
@@ -67,47 +68,34 @@ int main(int argc, char** argv)
     }
     else if (argc > 2)
     {
-        if (argv[1][0] != '-')
+        if ((argv[1][0] = '-') && (strlen (argv[1]) == 2))
         {
-            puts(PROMPT);
-            return 0;
-        }
-        if (strlen (argv[1]) == 2)
-        {
-            switch (argv[1][1])
+            pwd_len = ((strlen(argv[4]) == 8) || (strlen(argv[4]) == 16)) ? strlen(argv[4]) : 0;
+            if (pwd_len)
             {
-            case 'e' :
-                if (argc == 5)
-                {
-                    container_file_path = argv[2];
-                    sec_file_path = argv[3];
-                    memcpy(pwd, argv[4], KEY_LEN);
-                    attach = 1;
-                    cmd_ok = 1;
-                }
-                break;
-            case 's' :
-                if (argc == 5)
-                {
-                    container_file_path = argv[2];
-                    sec_file_path = argv[3];
-                    memcpy(pwd, argv[4], KEY_LEN);
-                    split = 1;
-                    cmd_ok = 1;
-                }
-                break;
+                memcpy(pwd, argv[4], pwd_len);
+                container_file_path = argv[2];
+                sec_file_path = argv[3];
 
-            default :
-                puts(PROMPT);
-                return 0;
-                break;
+                switch (argv[1][1])
+                {
+                case 'e' :
+                    if (argc == 5)
+                    {
+                        attach = 1;
+                        cmd_ok = 1;
+                    }
+                    break;
+                case 's' :
+                    if (argc == 5)
+                    {
+                        split = 1;
+                        cmd_ok = 1;
+                    }
+                    break;
+                }
             }
         }
-    }
-    else
-    {
-        puts(PROMPT);
-        return 0;
     }
 
     if (!cmd_ok)
@@ -188,11 +176,11 @@ int main(int argc, char** argv)
         memcpy(appendix + 2, (void*)&carrier_file_len, sizeof(uint64_t));
         CRC16_frame(appendix, APPENDIX_SIZE - 2, appendix + APPENDIX_SIZE - 2);
 
-       /*encrypt appendix*/
-        vEncrypt(cp_buff, appendix, APPENDIX_SIZE - 2, pwd);
+        /*encrypt appendix*/
+        vEncrypt(cp_buff, appendix, APPENDIX_SIZE - 2, pwd, pwd_len);
         memcpy(appendix, cp_buff, APPENDIX_SIZE - 2);
 
-       /*write appendix*/
+        /*write appendix*/
         lseek(container_file, carrier_file_len + sec_file_len, SEEK_SET);
         if ((write(container_file, appendix, APPENDIX_SIZE)) < APPENDIX_SIZE)
         {
@@ -213,7 +201,7 @@ int main(int argc, char** argv)
                 return -1;
             }
 
-            vEncrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd);
+            vEncrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd, pwd_len);
 
             lseek(container_file, carrier_file_len, SEEK_SET);
             if ((write(container_file, cp_buff + NUM_BYTES_ENC, NUM_BYTES_ENC)) < NUM_BYTES_ENC)
@@ -230,7 +218,7 @@ int main(int argc, char** argv)
                 puts("err. enc container_file footer read");
                 return -1;
             }
-            vEncrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd);
+            vEncrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd, pwd_len);
 
             lseek(container_file, carrier_file_len + sec_file_len - NUM_BYTES_ENC, SEEK_SET);
             if ((write(container_file, cp_buff + NUM_BYTES_ENC, NUM_BYTES_ENC)) < NUM_BYTES_ENC)
@@ -278,7 +266,7 @@ int main(int argc, char** argv)
 
 
         //decrypt appendix
-        vDecrypt(cp_buff, appendix, APPENDIX_SIZE - 2, pwd);
+        vDecrypt(cp_buff, appendix, APPENDIX_SIZE - 2, pwd, pwd_len);
         memcpy(appendix, cp_buff, APPENDIX_SIZE - 2);
 
         //calc && check crc16 of 10 bytes
@@ -336,7 +324,7 @@ int main(int argc, char** argv)
                 return -1;
             }
 
-            vDecrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd);
+            vDecrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd, pwd_len);
 
             lseek(sec_file, 0, SEEK_SET);
             if ((write(sec_file, cp_buff + NUM_BYTES_ENC, NUM_BYTES_ENC)) < NUM_BYTES_ENC)
@@ -353,7 +341,7 @@ int main(int argc, char** argv)
                 puts("err. enc container_file footer read");
                 return -1;
             }
-            vDecrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd);
+            vDecrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd, pwd_len);
 
             lseek(sec_file, sec_file_len - NUM_BYTES_ENC, SEEK_SET);
             if ((write(sec_file, cp_buff + NUM_BYTES_ENC, NUM_BYTES_ENC)) < NUM_BYTES_ENC)
@@ -466,7 +454,7 @@ int8_t CRC16_file(const char* path, uint8_t* dest)
     delete []frame;
     return 0;
 };
-void vEncrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key)
+void vEncrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key, uint8_t key_len)
 {
     uint8_t numBits = 3;
     int currKeyPos = 0;
@@ -484,7 +472,7 @@ void vEncrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key)
         {
             bBlock = S_TABLE[rBlock];
             bBlock = (bBlock ^ key[currKeyPos]);
-            if (currKeyPos == KEY_LEN - 1) currKeyPos = 0;
+            if (currKeyPos == key_len - 1) currKeyPos = 0;
             else currKeyPos++;
 
             overflowBits = (bBlock) >> (8 - numBits);
@@ -504,10 +492,10 @@ void vEncrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key)
     }
     return;
 };
-void vDecrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key)
+void vDecrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key, uint8_t key_len)
 {
     uint8_t numBits = 3;
-    int currKeyPos = KEY_LEN -1;
+    int currKeyPos = key_len -1;
     uint8_t lBlock = 0;
     uint8_t rBlock = 0;
     uint8_t bBlock = 0;
@@ -522,7 +510,7 @@ void vDecrypt (uint8_t* dest, uint8_t* data, uint64_t dataLen, uint8_t* key)
         {
             bBlock = S_TABLE[rBlock];
             bBlock = (bBlock ^ key[currKeyPos]);
-            if (currKeyPos == 0) currKeyPos = KEY_LEN - 1;
+            if (currKeyPos == 0) currKeyPos = key_len - 1;
             else currKeyPos--;
 
             overflowBits = (bBlock) >> (8 - numBits);
