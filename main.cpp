@@ -13,11 +13,11 @@
 
 
 #define APPENDIX_SIZE           12
-#define CP_BUFF_SIZE            2097152
+#define BUFF_SIZE            2000000
 
 #define MAX_KEY_LEN 16
-#define NUM_ROUNDS 16
-#define NUM_BYTES_ENC 8192
+#define NUM_ROUNDS 64
+
 
 
 uint64_t fsize(const char* path);
@@ -117,12 +117,15 @@ int main(int argc, char** argv)
         total: 12 bytes.
     */
     uint8_t    appendix[APPENDIX_SIZE];
-    uint8_t*            cp_buff = new uint8_t[CP_BUFF_SIZE];
+    uint8_t*   cp_buff = nullptr;
+    uint8_t*   sec_buff = nullptr;
     uint64_t pos;
     int32_t len;
 
     int32_t     sec_file, container_file;
 
+    cp_buff = new uint8_t[BUFF_SIZE];
+    sec_buff = new uint8_t[BUFF_SIZE];
 
     if (attach)
     {
@@ -156,13 +159,33 @@ int main(int argc, char** argv)
         while (pos < sec_file_len)
         {
             lseek(sec_file, pos, SEEK_SET);
-            len = read (sec_file, cp_buff, CP_BUFF_SIZE);
+            len = read (sec_file, cp_buff, BUFF_SIZE);
+
+            vEncrypt(sec_buff, cp_buff, ((len % 2) ? len - 1 : len), pwd, pwd_len);
 
             lseek(container_file, pos + carrier_file_len, SEEK_SET);
-            if ((write(container_file, cp_buff, len)) < len)
+
+            if (len % 2)
             {
-                puts("err. container_file sec_file write");
-                return -1;
+                if ((write(container_file, sec_buff, len - 1)) < len - 1)
+                {
+                    puts("err. container_file sec_file write");
+                    return -1;
+                }
+
+                if ((write(container_file, cp_buff + len - 1, 1)) < 1)
+                {
+                    puts("err. container_file sec_file write");
+                    return -1;
+                }
+            }
+            else
+            {
+                if ((write(container_file, sec_buff, len)) < len)
+                {
+                    puts("err. container_file sec_file write");
+                    return -1;
+                }
             }
 
             pos += len;
@@ -170,15 +193,14 @@ int main(int argc, char** argv)
 
         close(sec_file);
 
-
         /*calc appendix*/
         CRC16_file(sec_file_path, appendix);
         memcpy(appendix + 2, (void*)&carrier_file_len, sizeof(uint64_t));
         CRC16_frame(appendix, APPENDIX_SIZE - 2, appendix + APPENDIX_SIZE - 2);
 
         /*encrypt appendix*/
-        vEncrypt(cp_buff, appendix, APPENDIX_SIZE - 2, pwd, pwd_len);
-        memcpy(appendix, cp_buff, APPENDIX_SIZE - 2);
+        vEncrypt(sec_buff, appendix, APPENDIX_SIZE - 2, pwd, pwd_len);
+        memcpy(appendix, sec_buff, APPENDIX_SIZE - 2);
 
         /*write appendix*/
         lseek(container_file, carrier_file_len + sec_file_len, SEEK_SET);
@@ -189,54 +211,8 @@ int main(int argc, char** argv)
         }
 
 
-        /*File encryptyon*/
-        if (sec_file_len > 2 * NUM_BYTES_ENC)
-        {
-            //encrypt header
-            lseek(container_file, carrier_file_len, SEEK_SET);
-            len = read (container_file, cp_buff, NUM_BYTES_ENC);
-            if (len != NUM_BYTES_ENC)
-            {
-                puts("err. enc container_file header read");
-                return -1;
-            }
-
-            vEncrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd, pwd_len);
-
-            lseek(container_file, carrier_file_len, SEEK_SET);
-            if ((write(container_file, cp_buff + NUM_BYTES_ENC, NUM_BYTES_ENC)) < NUM_BYTES_ENC)
-            {
-                puts("err. container_file write");
-                return -1;
-            }
-
-            //encrypt footer
-            lseek(container_file, carrier_file_len + sec_file_len - NUM_BYTES_ENC, SEEK_SET);
-            len = read (container_file, cp_buff, NUM_BYTES_ENC);
-            if (len != NUM_BYTES_ENC)
-            {
-                puts("err. enc container_file footer read");
-                return -1;
-            }
-            vEncrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd, pwd_len);
-
-            lseek(container_file, carrier_file_len + sec_file_len - NUM_BYTES_ENC, SEEK_SET);
-            if ((write(container_file, cp_buff + NUM_BYTES_ENC, NUM_BYTES_ENC)) < NUM_BYTES_ENC)
-            {
-                puts("err. container_file write");
-                return -1;
-            }
-        }
-//        else
-//        {
-//            //encrypt all file
-//        }
-
-
         close(container_file);
-
         unlink(sec_file_path);
-        return 0;
     }
 
     if (split)
@@ -258,16 +234,16 @@ int main(int argc, char** argv)
 
         //read appendix
         lseek(container_file, container_file_len - APPENDIX_SIZE, SEEK_SET);
-        if ((read (container_file, appendix, APPENDIX_SIZE)) != APPENDIX_SIZE)
+        if ((read (container_file, sec_buff, APPENDIX_SIZE)) != APPENDIX_SIZE)
         {
             puts("err. carrier_file read");
             return -1;
         };
 
-
+        memcpy(appendix, sec_buff, APPENDIX_SIZE);
         //decrypt appendix
-        vDecrypt(cp_buff, appendix, APPENDIX_SIZE - 2, pwd, pwd_len);
-        memcpy(appendix, cp_buff, APPENDIX_SIZE - 2);
+        vDecrypt(appendix, sec_buff, APPENDIX_SIZE - 2, pwd, pwd_len);
+
 
         //calc && check crc16 of 10 bytes
         CRC16_frame(appendix, APPENDIX_SIZE - 2, cp_buff);
@@ -276,7 +252,6 @@ int main(int argc, char** argv)
             puts("Oops!");
             return -1;
         }
-
 
         carrier_file_len = *((uint64_t*)(appendix + 2));
         sec_file_len = container_file_len - carrier_file_len - APPENDIX_SIZE;
@@ -296,64 +271,40 @@ int main(int argc, char** argv)
 
         while (pos < carrier_file_len + sec_file_len)
         {
-            bytes_to_read = (pos + CP_BUFF_SIZE <= carrier_file_len + sec_file_len) ? CP_BUFF_SIZE : carrier_file_len + sec_file_len - pos;
+            bytes_to_read = (pos + BUFF_SIZE <= carrier_file_len + sec_file_len) ? BUFF_SIZE : carrier_file_len + sec_file_len - pos;
 
             lseek(container_file, pos, SEEK_SET);
-            len = read (container_file, cp_buff, bytes_to_read);
+            len = read (container_file, sec_buff, bytes_to_read);
+
+            vDecrypt(cp_buff, sec_buff, ((len % 2) ? len - 1 : len), pwd, pwd_len);
 
             lseek(sec_file, pos - carrier_file_len, SEEK_SET);
-            if ((write(sec_file, cp_buff, len)) < len)
+
+            if (len % 2)
             {
-                puts("err. sec_file write");
-                return -1;
+                if ((write(sec_file, cp_buff, len - 1)) < len - 1)
+                {
+                    puts("err. container_file sec_file write");
+                    return -1;
+                }
+
+                if ((write(sec_file, sec_buff + len - 1, 1)) < 1)
+                {
+                    puts("err. container_file sec_file write");
+                    return -1;
+                }
+            }
+            else
+            {
+                if ((write(sec_file, cp_buff, len)) < len)
+                {
+                    puts("err. container_file sec_file write");
+                    return -1;
+                }
             }
 
             pos += len;
         }
-
-
-        /*Encryptyon*/
-        if (sec_file_len > 2 * NUM_BYTES_ENC)
-        {
-            //decrypt header
-            lseek(sec_file, 0, SEEK_SET);
-            len = read (sec_file, cp_buff, NUM_BYTES_ENC);
-            if (len != NUM_BYTES_ENC)
-            {
-                puts("err. dec sec_file header read");
-                return -1;
-            }
-
-            vDecrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd, pwd_len);
-
-            lseek(sec_file, 0, SEEK_SET);
-            if ((write(sec_file, cp_buff + NUM_BYTES_ENC, NUM_BYTES_ENC)) < NUM_BYTES_ENC)
-            {
-                puts("err.  dec sec_file write");
-                return -1;
-            }
-
-            //encrypt footer
-            lseek(sec_file, sec_file_len - NUM_BYTES_ENC, SEEK_SET);
-            len = read (sec_file, cp_buff, NUM_BYTES_ENC);
-            if (len != NUM_BYTES_ENC)
-            {
-                puts("err. enc container_file footer read");
-                return -1;
-            }
-            vDecrypt(cp_buff + NUM_BYTES_ENC, cp_buff, NUM_BYTES_ENC, pwd, pwd_len);
-
-            lseek(sec_file, sec_file_len - NUM_BYTES_ENC, SEEK_SET);
-            if ((write(sec_file, cp_buff + NUM_BYTES_ENC, NUM_BYTES_ENC)) < NUM_BYTES_ENC)
-            {
-                puts("err. container_file write");
-                return -1;
-            }
-        }
-//        else
-//        {
-//            //encrypt all file
-//        }
 
         close(sec_file);
 
@@ -373,6 +324,7 @@ int main(int argc, char** argv)
 
 
     delete []cp_buff;
+    delete []sec_buff;
     return 0;
 }
 
